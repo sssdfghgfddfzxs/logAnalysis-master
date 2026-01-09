@@ -1,0 +1,59 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+  fields:
+    source: nginx
+    log_type: web_server
+  fields_under_root: true
+  multiline.pattern: '^\d{4}/\d{2}/\d{2}'
+  multiline.negate: true
+  multiline.match: after
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/app/*.log
+  fields:
+    source: application
+    log_type: application
+  fields_under_root: true
+
+# 处理器配置
+processors:
+- add_host_metadata:
+    when.not.contains.tags: forwarded
+- add_docker_metadata: ~
+- add_kubernetes_metadata: ~
+
+# 输出配置 - 发送到你的日志分析系统
+output.http:
+  hosts: ["http://localhost:8080"]
+  path: "/api/v1/logs/batch"
+  method: "POST"
+  headers:
+    Content-Type: "application/json"
+  
+  # 批量配置
+  bulk_max_size: 50
+  flush_interval: 10s
+  
+  # 重试配置
+  max_retries: 3
+  backoff.init: 1s
+  backoff.max: 60s
+
+# 日志配置
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# 模板配置
+setup.template.enabled: false
+setup.ilm.enabled: false

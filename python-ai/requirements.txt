@@ -1,0 +1,13 @@
+grpcio
+grpcio-tools
+protobuf
+scikit-learn
+pandas
+numpy
+scipy
+joblib
+python-dotenv
+openai
+requests
+flask
+flask-cors

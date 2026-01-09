@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package ai_analysis;
+
+option go_package = "intelligent-log-analysis/pkg/proto";
+
+service AIAnalysisService {
+  rpc AnalyzeLogs(LogAnalysisRequest) returns (LogAnalysisResponse);
+}
+
+message LogAnalysisRequest {
+  repeated LogEntry logs = 1;
+}
+
+message LogEntry {
+  string id = 1;
+  string timestamp = 2;
+  string level = 3;
+  string message = 4;
+  string source = 5;
+  map<string, string> metadata = 6;
+}
+
+message LogAnalysisResponse {
+  repeated AnalysisResult results = 1;
+  string status = 2;
+  string error_message = 3;
+}
+
+message AnalysisResult {
+  string log_id = 1;
+  bool is_anomaly = 2;
+  double anomaly_score = 3;
+  repeated string root_causes = 4;
+  repeated string recommendations = 5;
+}

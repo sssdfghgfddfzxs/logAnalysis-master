@@ -1,0 +1,117 @@
+filebeat.inputs:
+- type: log
+  enabled: true
+  paths:
+    - /var/log/nginx/access.log
+  fields:
+    source: nginx-access
+    log_type: access
+  fields_under_root: true
+  
+  # Nginx access log解析
+  processors:
+  - dissect:
+      tokenizer: '%{remote_addr} - %{remote_user} [%{timestamp}] "%{method} %{url} %{http_version}" %{response_code} %{body_bytes_sent} "%{http_referer}" "%{http_user_agent}"'
+      field: "message"
+      target_prefix: "nginx"
+  
+  - timestamp:
+      field: nginx.timestamp
+      layouts:
+        - '02/Jan/2006:15:04:05 -0700'
+      test:
+        - '25/Dec/2025:10:30:45 +0800'
+
+- type: log
+  enabled: true
+  paths:
+    - /var/log/nginx/error.log
+  fields:
+    source: nginx-error
+    log_type: error
+  fields_under_root: true
+  
+  # Nginx error log解析
+  processors:
+  - dissect:
+      tokenizer: '%{timestamp} [%{level}] %{pid}#%{tid}: %{message}'
+      field: "message"
+      target_prefix: "nginx"
+
+# 全局处理器
+processors:
+- script:
+    lang: javascript
+    source: >
+      function process(event) {
+        // 转换为系统期望的格式
+        var logEntry = {
+          timestamp: event.Get("@timestamp"),
+          level: "INFO",
+          message: event.Get("message"),
+          source: event.Get("source") || "nginx",
+          metadata: {}
+        };
+        
+        // 设置日志级别
+        if (event.Get("log_type") === "error") {
+          logEntry.level = "ERROR";
+        } else if (event.Get("nginx.level")) {
+          var level = event.Get("nginx.level").toUpperCase();
+          if (["DEBUG", "INFO", "WARN", "ERROR", "FATAL"].includes(level)) {
+            logEntry.level = level;
+          }
+        }
+        
+        // 添加元数据
+        if (event.Get("nginx.remote_addr")) {
+          logEntry.metadata.remote_addr = event.Get("nginx.remote_addr");
+        }
+        if (event.Get("nginx.response_code")) {
+          logEntry.metadata.response_code = event.Get("nginx.response_code");
+        }
+        if (event.Get("nginx.method")) {
+          logEntry.metadata.method = event.Get("nginx.method");
+        }
+        if (event.Get("nginx.url")) {
+          logEntry.metadata.url = event.Get("nginx.url");
+        }
+        if (event.Get("nginx.http_user_agent")) {
+          logEntry.metadata.user_agent = event.Get("nginx.http_user_agent");
+        }
+        
+        // 设置转换后的数据
+        event.Put("log_entry", logEntry);
+        return event;
+      }
+
+# 输出配置
+output.http:
+  hosts: ["http://localhost:8080"]
+  path: "/api/v1/logs"
+  method: "POST"
+  headers:
+    Content-Type: "application/json"
+  
+  # 使用转换后的格式
+  codec.json:
+    pretty: false
+    escape_html: false
+  
+  # 批量配置
+  bulk_max_size: 10
+  flush_interval: 5s
+  
+  # 重试配置
+  max_retries: 3
+  backoff.init: 1s
+  backoff.max: 30s
+
+# 日志配置
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat-nginx
+  keepfiles: 3
+  permissions: 0644
