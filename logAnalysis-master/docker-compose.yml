@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: log-analysis-postgres
+    environment:
+      POSTGRES_DB: log_analysis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - log-analysis-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:6-alpine
+    container_name: log-analysis-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - log-analysis-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # AI Analysis Service (包含LLM分析功能)
+  ai-service:
+    build:
+      context: ./python-ai
+      dockerfile: Dockerfile
+    container_name: log-analysis-ai-service
+    ports:
+      - "50051:50051"
+    environment:
+      - AI_SERVICE_PORT=50051
+      - AI_SERVICE_HOST=0.0.0.0
+      - MODEL_PATH=/app/models
+      - LOG_LEVEL=INFO
+      - SILICONFLOW_API_TOKEN=${SILICONFLOW_API_TOKEN:-}
+      - SILICONFLOW_API_URL=${SILICONFLOW_API_URL:-https://api.siliconflow.cn/v1/chat/completions}
+      - SILICONFLOW_MODEL=${SILICONFLOW_MODEL:-deepseek-ai/DeepSeek-V2.5}
+    volumes:
+      - ai_models:/app/models
+    networks:
+      - log-analysis-network
+    command: ["python", "ai_service.py"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; import sys; from proto import ai_analysis_pb2_grpc; channel = grpc.insecure_channel('localhost:50051'); stub = ai_analysis_pb2_grpc.AIAnalysisServiceStub(channel); sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Go Backend Service
+  go-backend:
+    build:
+      context: ./go-backend
+      dockerfile: Dockerfile
+    container_name: log-analysis-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - SERVER_PORT=8080
+      - SERVER_HOST=0.0.0.0
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - DB_NAME=log_analysis
+      - DB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - AI_GRPC_ADDRESS=ai-service:50051
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    networks:
+      - log-analysis-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Vue Frontend
+  vue-frontend:
+    build:
+      context: ./vue-frontend
+      dockerfile: Dockerfile
+    container_name: log-analysis-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+    depends_on:
+      - go-backend
+    networks:
+      - log-analysis-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ai_models:
+    driver: local
+
+networks:
+  log-analysis-network:
+    driver: bridge
